@@ -133,17 +133,18 @@ class TextSim(object):
             # Get the MinHash signature for document i.
             signature1 = minhash_list[i]     
             max_count = 0
+            max_ind = 0
             # For each of the other test documents...
             for j in range(0, len(minhash_list)):
                 # Get the MinHash signature for document j.
                 signature2 = minhash_list[j]  
                 if i == j:
-                    next
+                    continue
                 count = 0
                 # Count the number of positions in the minhash signature which are equal.
                 for k in range(0, numHashes):
                     count = count + (signature1[k] == signature2[k]) 
-                if count > max_count:
+                if count >= max_count:
                     max_count = count
                     max_ind = j
             
@@ -263,8 +264,6 @@ if __name__ == "__main__":
         Jscore_indices = []
             
         # For each of the test documents...
-        i=0
-        j=0
         for i in tqdm(range(0, len(signatures_short))):
             # Get the MinHash signature for document i.
             signature1 = signatures_short[i]
