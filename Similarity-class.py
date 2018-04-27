@@ -15,11 +15,6 @@ import os
 import binascii
 import random
 
-def read_config_yml():
-    file = open(os.getcwd() + '/Spam_detection_algo/app/config/config.yml' , "rb")
-    config = yaml.load(file)
-    return config
-
 @contextmanager
 def timer(name):
     """
@@ -30,6 +25,19 @@ def timer(name):
     t0 = time.time()
     yield
     print('%s done in %.0f s'% (name,time.time()-t0))
+    
+def read_config_yml():
+    file = open(os.getcwd() + '/Spam_detection_algo/app/config/config.yml' , "rb")
+    config = yaml.load(file)
+    return config
+
+def clean_text(text):
+    remove_punct_dict = dict((ord(punct), " ") for punct in string.punctuation)
+    # To lower and remove punctuation
+    text = text.lower().translate(remove_punct_dict)      
+    # Remove extra spaces
+    text = ' '.join(text.split())
+    return text
 
 class TextSim(object):
     
@@ -37,35 +45,23 @@ class TextSim(object):
         self.id = id_name
         self.text_column = text_column
         self.shinglesize = shinglesize
-    
-    def _clean_text(self, text):
-        remove_punct_dict = dict((ord(punct), " ") for punct in string.punctuation)
-        # To lower and remove punctuation
-        text = text.lower().translate(remove_punct_dict)      
-        # Remove extra spaces
-        text = ' '.join(text.split())
-        return text
 
     def create_shingles(self, data):
-        # Create a dictionary of the texts, mapping the text identifier to actual texts
-        id_list = list(data[self.id])
+
         text_list = list(data[self.text_column])
-        docsAsShingleSets = {}
+        shingles_all = []
         
         maxshingleID = 0
         for i in tqdm(range(0, len(text_list))):       
-            # Maintain a list of document IDs
-            docID = id_list[i]
             # Convert text paragraphs into a list of words
-            words = self._clean_text(text_list[i])
-            words = words.split(" ") 
+            words = text_list[i].split(" ")
             # Store the completed list of shingles for this document in the dictionary.
             shingles_set = self._create_shingle(words)
             maxID = max(shingles_set) if shingles_set else 0
             if maxID > maxshingleID:
                 maxshingleID = maxID
-            docsAsShingleSets[docID] = shingles_set
-        return docsAsShingleSets, maxshingleID
+            shingles_all.append(shingles_set)
+        return shingles_all, maxshingleID
        
     def _create_shingle(self, doc):
         # 'shinglesInDoc' will hold all of the unique shingle IDs present in the current document
@@ -74,7 +70,7 @@ class TextSim(object):
         for index in range(0, len(doc) - (self.shinglesize - 1)):
             # Construct the shingle text by combining words together, depending on the shingle size passed
             shingle = ""
-            for  w in doc[index:(index + (self.shinglesize - 1))]:
+            for  w in doc[index:(index + self.shinglesize)]:
                 shingle = shingle + w + " "        
             # Hash the shingle to a 32-bit integer.
             shingle = bytes(shingle.strip(), encoding='utf-8')
@@ -98,8 +94,7 @@ class TextSim(object):
         for i in tqdm(range(0, len(text_list))):
 
             # Convert text paragraphs into a list of words
-            words = self._clean_text(text_list[i])
-            words = words.split(" ")     
+            words = text_list[i].split(" ")   
             # Create shingles for 
             shingleIDSet = self._create_shingle(words)
             # The resulting minhash signature for this document. 
@@ -113,9 +108,9 @@ class TextSim(object):
                 for shingleID in shingleIDSet:
                     # Evaluate the hash function.
                     hashCode = (coeffA[i] * shingleID + coeffB[i]) % nextPrime 
-                # Track the lowest hash code seen.
-                if hashCode < minHashCode:
-                    minHashCode = hashCode
+                    # Track the lowest hash code seen.
+                    if hashCode < minHashCode:
+                        minHashCode = hashCode
                 # Add the smallest hash code value as component number 'i' of the signature.
                 signature.append(minHashCode)
           
@@ -124,18 +119,18 @@ class TextSim(object):
 
         return signatures
     
-    def jscore(self, minhash_list,numHashes=10):
+    def jscore(self, num1, num2, minhash_list,numHashes=10):
         Jscores = []
         Jscore_indices = []
             
         # For each of the test documents...
-        for i in tqdm(range(0, len(minhash_list))):
+        for i in tqdm(range(0, num1)):
             # Get the MinHash signature for document i.
             signature1 = minhash_list[i]     
             max_count = 0
             max_ind = 0
             # For each of the other test documents...
-            for j in range(0, len(minhash_list)):
+            for j in range(0, num2):
                 # Get the MinHash signature for document j.
                 signature2 = minhash_list[j]  
                 if i == j:
@@ -241,53 +236,33 @@ if __name__ == "__main__":
                           (df_rev_text['is_contested'] == 0) &
                           (df_rev_text['status'] == 'PUBLISHED')]
         
+#        import pickle
+#        with open("df_rev_text.p","rb") as fp:
+#            df_rev_text = pickle.load(fp)   
+#        
+#        rev = df_rev_text[~df_rev_text['answer'].isnull()]
+#        
+#        # Word count. Drop reviews with word count less than shingle size requirements
+#        rev['answer'] = rev['answer'].apply(lambda x: clean_text(x))   
+#        rev['word_count'] = rev['answer'].apply(lambda text: sum(1 for word in text.split()))
+#        rev = rev[rev['word_count'] >= 20]
+
         # List of survey ids
         sur_ids = list(rev['survey_response_id'])
-        
+                
         # Instantiating TextSim class
         sim = TextSim(id_name = "survey_response_id",text_column = "answer",shinglesize=5)
         
         # Creating shingles from documents
-        shingles_dict, maxShingleID = sim.create_shingles(rev)
+        shingles, maxShingleID = sim.create_shingles(rev)
         
         # Getting minhash signatures for each document
         signatures = sim.minhash_signatures(rev,numHashes=10)
         
         # Getting Jaccard scores and document indices which produce that score
-        Jscores, Jscore_indices = sim.jscore(signatures[:10000],numHashes=10)
+        Jscores, Jscore_indices = sim.jscore(100, len(signatures), signatures, numHashes=10)
         
-
-        # Bug-checking
-        signatures_short = signatures[:100] 
-        
-        Jscores = []
-        Jscore_indices = []
-            
-        # For each of the test documents...
-        for i in tqdm(range(0, len(signatures_short))):
-            # Get the MinHash signature for document i.
-            signature1 = signatures_short[i]
-          
-            max_count = 0
-            max_ind = 0
-            # For each of the other test documents...
-            for j in range(0, len(signatures_short)):
-            
-                # Get the MinHash signature for document j.
-                signature2 = signatures_short[j]
-                
-                if i == j:
-                    continue
-        
-                count = 0
-                # Count the number of positions in the minhash signature which are equal.
-                for k in range(0, 10):
-                    count = count + (signature1[k] == signature2[k]) 
-                
-                if count >= max_count:
-                    max_count = count
-                    max_ind = j
-            
-            Jscores.append(max_count)   
-            Jscore_indices.append(max_ind)
-
+        # Debugging. Score 5
+        print("{}\n\n{}".format(rev.iloc[38,:]['answer'],
+                              rev.iloc[29277,:]['answer']))
+  
