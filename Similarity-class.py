@@ -14,6 +14,7 @@ import yaml
 import os
 import binascii
 import random
+from numba import jit
 
 @contextmanager
 def timer(name):
@@ -45,37 +46,24 @@ class TextSim(object):
         self.id = id_name
         self.text_column = text_column
         self.shinglesize = shinglesize
-
+    
     def create_shingles(self, data):
-
         text_list = list(data[self.text_column])
-        shingles_all = []
-        
-        maxshingleID = 0
-        for i in tqdm(range(0, len(text_list))):       
-            # Convert text paragraphs into a list of words
-            words = text_list[i].split(" ")
-            # Store the completed list of shingles for this document in the dictionary.
-            shingles_set = self._create_shingle(words)
-            maxID = max(shingles_set) if shingles_set else 0
-            if maxID > maxshingleID:
-                maxshingleID = maxID
-            shingles_all.append(shingles_set)
+        shingles_all = [self._create_shingle(text.split(" ")) for text in tqdm(text_list)]
+        maxshingleID = max([max(sublist) for sublist in shingles_all])
         return shingles_all, maxshingleID
-       
+    
     def _create_shingle(self, doc):
         # 'shinglesInDoc' will hold all of the unique shingle IDs present in the current document
         shinglesInDoc = set()
         
         for index in range(0, len(doc) - (self.shinglesize - 1)):
-            # Construct the shingle text by combining words together, depending on the shingle size passed
-            shingle = ""
-            for  w in doc[index:(index + self.shinglesize)]:
-                shingle = shingle + w + " "        
+            # Construct the shingle text by combining words together, depending on the shingle size passed      
+            shingle = " ".join(doc[index:(index + self.shinglesize)])           
             # Hash the shingle to a 32-bit integer.
             shingle = bytes(shingle.strip(), encoding='utf-8')
             crc = binascii.crc32(shingle) & 0xffffffff
-            # Add the hash value to the list of shingles for the current document. 
+            # Add the hash value to the set of shingles for the current document. 
             shinglesInDoc.add(crc)         
         return shinglesInDoc
     
@@ -119,26 +107,27 @@ class TextSim(object):
 
         return signatures
     
-    def jscore(self, num1, num2, minhash_list,numHashes=10):
+    def jscore(self, len1, len2, minhash_list,numHashes=10):
         Jscores = []
         Jscore_indices = []
             
         # For each of the test documents...
-        for i in tqdm(range(0, num1)):
+        for i in tqdm(range(0, len1)):
             # Get the MinHash signature for document i.
             signature1 = minhash_list[i]     
             max_count = 0
             max_ind = 0
             # For each of the other test documents...
-            for j in range(0, num2):
+            for j in range(0, len2):
                 # Get the MinHash signature for document j.
                 signature2 = minhash_list[j]  
                 if i == j:
                     continue
-                count = 0
-                # Count the number of positions in the minhash signature which are equal.
-                for k in range(0, numHashes):
-                    count = count + (signature1[k] == signature2[k]) 
+#                count = 0
+#                # Count the number of positions in the minhash signature which are equal.
+#                for k in range(0, numHashes):
+#                    count = count + (signature1[k] == signature2[k])   
+                count = len(set(signature1) & set(signature2))                
                 if count >= max_count:
                     max_count = count
                     max_ind = j
@@ -260,9 +249,29 @@ if __name__ == "__main__":
         signatures = sim.minhash_signatures(rev,numHashes=10)
         
         # Getting Jaccard scores and document indices which produce that score
-        Jscores, Jscore_indices = sim.jscore(100, len(signatures), signatures, numHashes=10)
+        Jscores, Jscore_indices = sim.jscore(len(signatures), len(signatures), signatures, numHashes=10)
         
         # Debugging. Score 5
-        print("{}\n\n{}".format(rev.iloc[38,:]['answer'],
-                              rev.iloc[29277,:]['answer']))
-  
+        print("{}\n\n{}".format(rev.iloc[50,:]['answer'],
+                              rev.iloc[374,:]['answer']))
+
+
+
+        Jscores = []
+        Jscore_indices = []
+            
+        for i in tqdm(range(0, 100)):
+            signature1 = signatures[i]     
+            max_count = 0
+            max_ind = 0
+            for j in range(0, 100):
+                signature2 = signatures[j]  
+                if i == j:
+                    continue
+                count = len(set(signature1) & set(signature2))                
+                if count >= max_count:
+                    max_count = count
+                    max_ind = j
+            
+            Jscores.append(max_count)   
+            Jscore_indices.append(max_ind)
