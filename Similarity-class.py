@@ -225,16 +225,16 @@ if __name__ == "__main__":
                           (df_rev_text['is_contested'] == 0) &
                           (df_rev_text['status'] == 'PUBLISHED')]
         
-#        import pickle
-#        with open("df_rev_text.p","rb") as fp:
-#            df_rev_text = pickle.load(fp)   
-#        
-#        rev = df_rev_text[~df_rev_text['answer'].isnull()]
-#        
-#        # Word count. Drop reviews with word count less than shingle size requirements
-#        rev['answer'] = rev['answer'].apply(lambda x: clean_text(x))   
-#        rev['word_count'] = rev['answer'].apply(lambda text: sum(1 for word in text.split()))
-#        rev = rev[rev['word_count'] >= 20]
+        import pickle
+        with open("df_rev_text.p","rb") as fp:
+            df_rev_text = pickle.load(fp)   
+        
+        rev = df_rev_text[~df_rev_text['answer'].isnull()]
+        
+        # Word count. Drop reviews with word count less than shingle size requirements
+        rev['answer'] = rev['answer'].apply(lambda x: clean_text(x))   
+        rev['word_count'] = rev['answer'].apply(lambda text: sum(1 for word in text.split()))
+        rev = rev[rev['word_count'] >= 20]
 
         # List of survey ids
         sur_ids = list(rev['survey_response_id'])
@@ -254,24 +254,3 @@ if __name__ == "__main__":
         # Debugging. Score 5
         print("{}\n\n{}".format(rev.iloc[50,:]['answer'],
                               rev.iloc[374,:]['answer']))
-
-
-
-        Jscores = []
-        Jscore_indices = []
-            
-        for i in tqdm(range(0, 100)):
-            signature1 = signatures[i]     
-            max_count = 0
-            max_ind = 0
-            for j in range(0, 100):
-                signature2 = signatures[j]  
-                if i == j:
-                    continue
-                count = len(set(signature1) & set(signature2))                
-                if count >= max_count:
-                    max_count = count
-                    max_ind = j
-            
-            Jscores.append(max_count)   
-            Jscore_indices.append(max_ind)
