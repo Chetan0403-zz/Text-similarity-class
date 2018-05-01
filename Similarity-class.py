@@ -249,7 +249,7 @@ if __name__ == "__main__":
         signatures = sim.minhash_signatures(rev,numHashes=10)
         
         # Getting Jaccard scores and document indices which produce that score
-        Jscores, Jscore_indices = sim.jscore(len(signatures), len(signatures), signatures, numHashes=10)
+        Jscores, Jscore_indices = sim.jscore(100, len(signatures), signatures, numHashes=10)
         
         # Debugging. Score 5
         print("{}\n\n{}".format(rev.iloc[50,:]['answer'],
