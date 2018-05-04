@@ -14,7 +14,10 @@ import yaml
 import os
 import binascii
 import random
-from numba import jit
+from multiprocessing import Process, cpu_count, Pool
+from functools import partial
+import numba as nb
+from numba.types import List, int64
 
 @contextmanager
 def timer(name):
@@ -39,6 +42,23 @@ def clean_text(text):
     # Remove extra spaces
     text = ' '.join(text.split())
     return text
+
+# As of now, it's not possible (mostly) to jit compile a method inside a class
+@nb.jit(nopython=True)
+def mp_loops(y1,y2):
+    i = y1[0]
+    sig1 = y1[1]
+    max_count = 0
+    for j in range(i+1, y2.shape[0]):
+        sig2 = y2[j,:]  
+        if i == j:
+            continue
+        #count = len(set(sig1) & set(sig2)) 
+        count = np.sum(sig1 == sig2)              
+        if count >= max_count:
+            max_count = count  
+            max_ind = j
+    return max_count, max_ind
 
 class TextSim(object):
     
@@ -107,7 +127,7 @@ class TextSim(object):
 
         return signatures
     
-    def jscore(self, len1, len2, minhash_list,numHashes=10):
+    def jscore(self, len1, len2, minhash_list,numHashes=None):
         Jscores = []
         Jscore_indices = []
             
@@ -127,7 +147,7 @@ class TextSim(object):
 #                # Count the number of positions in the minhash signature which are equal.
 #                for k in range(0, numHashes):
 #                    count = count + (signature1[k] == signature2[k])   
-                count = len(set(signature1) & set(signature2))                
+                count = len(set(signature1) & set(signature2))              
                 if count >= max_count:
                     max_count = count
                     max_ind = j
@@ -135,7 +155,26 @@ class TextSim(object):
             Jscores.append(max_count)   
             Jscore_indices.append(max_ind)
         return Jscores, Jscore_indices
+
+    def mp_jscore(self, len1, len2, minhash_list,numHashes=None):              
+        listA = np.array(minhash_list[:len1],dtype=np.int64)
+        listA = [(i, sig) for i, sig in enumerate(listA)]
+        listB = np.array(minhash_list[:len2],dtype=np.int64)
+       
+        max_ = len(listA)
         
+        p = Pool(cpu_count())
+        
+        with Pool(cpu_count()) as p:
+            result = list(tqdm(p.imap(partial(mp_loops, y2=listB),listA,chunksize=5), total=max_))
+
+        Jscores = [res[0] for res in result] 
+        Jscore_indices = [res[1] for res in result] 
+
+        p.close()
+        p.join()        
+        return Jscores, Jscore_indices
+          
     def _pickRandomCoeffs(self, k):
         # Record the maximum shingle ID that we assigned.
         maxShingleID = 2**32-1
@@ -154,103 +193,22 @@ class TextSim(object):
 
 
 if __name__ == "__main__":
+    import pickle
+    with open("signatures.p","rb") as fp:
+        signatures = pickle.load(fp)
+                  
+    # Instantiating TextSim class
+    sim = TextSim(id_name = "survey_response_id",text_column = "answer",shinglesize=5)
+    
+    # Creating shingles from documents
+    shingles, maxShingleID = sim.create_shingles(rev)
+    
+    # Getting minhash signatures for each document
+    signatures = sim.minhash_signatures(rev,numHashes=10)
+    
+    # Getting Jaccard scores and document indices which produce that score
+    #Jscores, Jscore_indices = sim.jscore(len(signatures), len(signatures), signatures, numHashes=10)
+    Jscores, Jscore_indices = sim.mp_jscore(len(signatures), len(signatures), signatures, numHashes=10)
+    print(Jscores)
+    print(Jscore_indices)
         
-    with timer("Fetching data from feedback prod db"):
-        
-        # Establishing connection with feedback prod db
-        configuration = read_config_yml()
-        conn = mysql.connector.connect(user = configuration['mysql']['user'],
-                               password = configuration['mysql']['password'],
-                               host = configuration['mysql']['host'],
-                               database = configuration['mysql']['database'], 
-                               port = configuration['mysql']['port'])
-        
-        mycursor = conn.cursor()
-        print("Connection to feedback db established")
-        
-        # Columns with which dataframe needs to be saved
-        columns = ['doctor_id', 'survey_response_id', 'recommendation', 'created_at', 
-                   'rm_deleted_at', 'sr_deleted_at', 'sra_deleted_at', 's_deleted_at',
-                   'is_spam','user_verified','is_contested','mobile', 'channel', 
-                   'answer', 'status', 'owning_service', 'anonymous']
-        
-        # Fetch query
-        mycursor.execute("""select doctor_id, 
-                            rm.survey_response_id as survey_response_id,
-                            rm.recommendation, 
-                            rm.created_at, 
-                            rm.deleted_at as rm_deleted_at,
-                            sr.deleted_at as sr_deleted_at,
-                            sra.deleted_at as sra_deleted_at,
-                            s.deleted_at as s_deleted_at,
-                            s.is_spam,
-                            s.user_verified,
-                            s.is_contested,
-                            r.mobile, 
-                            channel, 
-                            answer, 
-                            rm.status, 
-                            c.owning_service, 
-                            s.anonymous                          
-                            FROM 
-                            feedback.survey_responses AS sr
-                            JOIN feedback.survey_response_answers AS sra ON sr.id=sra.survey_response_id
-                            JOIN feedback.review_moderations AS rm ON rm.survey_response_id=sra.survey_response_id
-                            JOIN feedback.surveys s ON sr.survey_id = s.id
-                            JOIN feedback.campaigns c ON s.campaign_id = c.id
-                            JOIN feedback.respondees as r on s.respondee_id=r.id
-                            WHERE rm.review_for = 'DOCTOR'""")
-        
-        # Store fetched data into dataframe
-        df_rev_text = mycursor.fetchall()
-        df_rev_text = pd.DataFrame(df_rev_text, columns = columns)
-       
-        # Closing feedback prod db connection
-        conn.close()    
-        mycursor.close()
- 
-    with timer("Computing review similarity scores"):
-        """ 
-        1. Computation of review text similarity below.
-        2. valid incremental reviews for each doctor are compared with each other and with past reviews on a range of 1-10 ngrams for similarity
-        3. Cosine similarity computed
-        """      
-        # Shortlisting reviews for similarity checking
-        rev = df_rev_text[(df_rev_text['rm_deleted_at'].isnull()) &
-                          (df_rev_text['sra_deleted_at'].isnull()) &
-                          (df_rev_text['sr_deleted_at'].isnull()) &
-                          (df_rev_text['s_deleted_at'].isnull()) &
-                          (df_rev_text['is_spam'] == 0) &
-                          (df_rev_text['user_verified'] == 1) &
-                          (df_rev_text['is_contested'] == 0) &
-                          (df_rev_text['status'] == 'PUBLISHED')]
-        
-        import pickle
-        with open("df_rev_text.p","rb") as fp:
-            df_rev_text = pickle.load(fp)   
-        
-        rev = df_rev_text[~df_rev_text['answer'].isnull()]
-        
-        # Word count. Drop reviews with word count less than shingle size requirements
-        rev['answer'] = rev['answer'].apply(lambda x: clean_text(x))   
-        rev['word_count'] = rev['answer'].apply(lambda text: sum(1 for word in text.split()))
-        rev = rev[rev['word_count'] >= 20]
-
-        # List of survey ids
-        sur_ids = list(rev['survey_response_id'])
-                
-        # Instantiating TextSim class
-        sim = TextSim(id_name = "survey_response_id",text_column = "answer",shinglesize=5)
-        
-        # Creating shingles from documents
-        shingles, maxShingleID = sim.create_shingles(rev)
-        
-        # Getting minhash signatures for each document
-        signatures = sim.minhash_signatures(rev,numHashes=10)
-        
-        # Getting Jaccard scores and document indices which produce that score
-        Jscores, Jscore_indices = sim.jscore(100, len(signatures), signatures, numHashes=10)
-        
-        # Debugging. Score 5
-        print("{}\n\n{}".format(rev.iloc[50,:]['answer'],
-                              rev.iloc[374,:]['answer']))
