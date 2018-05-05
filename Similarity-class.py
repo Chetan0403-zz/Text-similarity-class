@@ -53,7 +53,6 @@ def mp_loops(y1,y2):
         sig2 = y2[j,:]  
         if i == j:
             continue
-        #count = len(set(sig1) & set(sig2)) 
         count = np.sum(sig1 == sig2)              
         if count >= max_count:
             max_count = count  
