@@ -18,6 +18,7 @@ from multiprocessing import Process, cpu_count, Pool
 from functools import partial
 import numba as nb
 from numba.types import List, int64
+import pickle 
 
 @contextmanager
 def timer(name):
@@ -49,7 +50,7 @@ def mp_loops(y1,y2):
     i = y1[0]
     sig1 = y1[1]
     max_count = 0
-    for j in range(i+1, y2.shape[0]):
+    for j in range(0, y2.shape[0]):
         sig2 = y2[j,:]  
         if i == j:
             continue
@@ -192,22 +193,39 @@ class TextSim(object):
 
 
 if __name__ == "__main__":
-    import pickle
-    with open("signatures.p","rb") as fp:
-        signatures = pickle.load(fp)
-                  
+       
+    with open("df_rev_text.p","rb") as fp:
+        df_rev_text = pickle.load(fp)
+            
+    # Basic preprocessing of columns (type conversions) 
+    df_rev_text = (df_rev_text[~df_rev_text['doctor_id'].isnull()]
+                   .assign(doctor_id = lambda x: x['doctor_id'].astype(int).astype(str),
+                           #survey_response_id = lambda x: x['survey_response_id'].astype(str),
+                           answer = lambda x: x['answer'].astype(str),
+                           created_at = lambda x: pd.to_datetime(x['created_at'])))              
+    
+    # Shortlisting reviews for similarity checking
+    rev = df_rev_text[(df_rev_text['rm_deleted_at'].isnull()) &
+                      (df_rev_text['sra_deleted_at'].isnull()) &
+                      (df_rev_text['sr_deleted_at'].isnull()) &
+                      (df_rev_text['s_deleted_at'].isnull()) &
+                      (df_rev_text['is_spam'] == 0) &
+                      (df_rev_text['user_verified'] == 1) &
+                      (df_rev_text['is_contested'] == 0) &
+                      (df_rev_text['status'] == 'PUBLISHED')]
+    
+    # Create word count column
+    rev = rev.assign(clean_answer = lambda df: df['answer'].apply(lambda text: clean_text(text)))       
+    rev = rev.assign(word_count = lambda df: df['clean_answer'].apply(lambda text: sum(1 for word in text.split())))     
+
+    # Keep only reviews with at least 20 words
+    rev = rev[rev['word_count'] >= 20]  
+      
     # Instantiating TextSim class
     sim = TextSim(id_name = "survey_response_id",text_column = "answer",shinglesize=5)
-    
-    # Creating shingles from documents
-    shingles, maxShingleID = sim.create_shingles(rev)
     
     # Getting minhash signatures for each document
     signatures = sim.minhash_signatures(rev,numHashes=10)
     
     # Getting Jaccard scores and document indices which produce that score
-    #Jscores, Jscore_indices = sim.jscore(len(signatures), len(signatures), signatures, numHashes=10)
-    Jscores, Jscore_indices = sim.mp_jscore(len(signatures), len(signatures), signatures, numHashes=10)
-    print(Jscores)
-    print(Jscore_indices)
-        
+    Jscores, Jscore_indices = sim.mp_jscore(10000, len(signatures), signatures, numHashes=10)
